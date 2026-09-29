@@ -1,0 +1,77 @@
+# Two automations: one sends the values during the day, the other clears
+# the display at night and stops talking to the thermometer (saves the CR2032).
+#
+# Replace:
+#   A4:C1:38:XX:XX:XX                           - your thermometer's MAC address
+#   sensor.solar_power                          - current PV production in W
+#   sensor.solar_self_consumption_percent       - from examples/template_sensors.yaml
+#   binary_sensor.kitchen_motion, person.me     - optional, see "fast" below
+
+- id: solar_meter_display
+  alias: "Solar meter - send values"
+  description: >
+    Sends PV output (kW) and self-consumption (%) to the thermometer.
+    Every 3 min when someone is near the display, otherwise every 8 min.
+  triggers:
+    - trigger: time_pattern
+      minutes: "/3"
+      id: fast
+    - trigger: time_pattern
+      minutes: "/8"
+      id: slow
+    - trigger: numeric_state # first production in the morning -> send right away
+      entity_id: sensor.solar_power
+      above: 0
+      id: sunrise
+    - trigger: homeassistant
+      event: start
+      id: start
+  conditions:
+    - condition: numeric_state
+      entity_id: sensor.solar_power
+      above: 0
+    # The 3-minute trigger only counts when someone is around.
+    # Don't have a motion sensor? Delete this condition and the "slow" trigger,
+    # and set the "fast" trigger to the interval you want.
+    - condition: template
+      value_template: >
+        {% set m = states.binary_sensor.kitchen_motion %}
+        {{ trigger.id != 'fast' or (
+             is_state('person.me', 'home') and m is not none and
+             (m.state == 'on' or (now() - m.last_changed).total_seconds() < 600)) }}
+  variables:
+    pct: "{{ states('sensor.solar_self_consumption_percent') | float(0) }}"
+  actions:
+    - action: pvvx_display.show
+      data:
+        address: "A4:C1:38:XX:XX:XX"
+        big: "{{ (states('sensor.solar_power') | float(0) / 1000) | round(1) }}"
+        small: "{{ pct | round(0) }}"
+        validity: 65535
+        percent: true
+        # face: (^_^) >=80 %, ^_^ >=60 %, happy+sad 40-60 %, sad 20-40 %, (sad) <20 %
+        happy: "{{ pct >= 40 }}"
+        sad: "{{ pct < 60 }}"
+        bracket: "{{ pct >= 80 or pct < 20 }}"
+  mode: single
+  max_exceeded: silent
+
+- id: solar_meter_display_night
+  alias: "Solar meter - night"
+  description: After sunset or 10 min without production, show zeros and stop sending.
+  triggers:
+    - trigger: numeric_state
+      entity_id: sensor.solar_power
+      below: 1
+      for: "00:10:00"
+    - trigger: sun
+      event: sunset
+  actions:
+    - action: pvvx_display.show
+      data:
+        address: "A4:C1:38:XX:XX:XX"
+        big: 0
+        small: 0
+        validity: 65535
+        percent: true
+  mode: single

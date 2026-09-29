@@ -1,0 +1,39 @@
+# Self-consumption sensors - add to configuration.yaml (or a template: package).
+#
+# Replace these with your own entities:
+#   sensor.solar_power        - current PV production in W (e.g. inverter active power)
+#   sensor.grid_export_power  - current export to the grid in W (always >= 0)
+#
+# If your grid meter gives one signed value instead (e.g. + = export, - = import),
+# use the "grid_export_power" sensor below and point it at that meter.
+
+template:
+  - sensor:
+      # Only needed if your meter reports a single signed value (+ export / - import).
+      - name: "Grid export power"
+        unique_id: grid_export_power
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {{ [states('sensor.grid_meter_power') | float(0), 0] | max }}
+
+      # PV power used directly at home = production - export
+      - name: "Solar self-consumption"
+        unique_id: solar_self_consumption_w
+        unit_of_measurement: "W"
+        device_class: power
+        state_class: measurement
+        state: >
+          {{ [ states('sensor.solar_power') | float(0)
+               - states('sensor.grid_export_power') | float(0), 0 ] | max }}
+
+      # Share of the current production used at home, 0-100 %
+      - name: "Solar self-consumption percent"
+        unique_id: solar_self_consumption_percent
+        unit_of_measurement: "%"
+        state_class: measurement
+        state: >
+          {% set p = states('sensor.solar_power') | float(0) %}
+          {% set v = states('sensor.solar_self_consumption') | float(0) %}
+          {% if p > 50 %}{{ [[v / p * 100, 100] | min, 0] | max | round(0) }}{% else %}0{% endif %}

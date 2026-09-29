@@ -1,0 +1,51 @@
+show:
+  name: Show on LCD
+  description: Sends a number, a percentage and a smiley to a thermometer running pvvx firmware.
+  fields:
+    address:
+      name: BLE address
+      description: MAC address of the thermometer.
+      required: true
+      example: "A4:C1:38:XX:XX:XX"
+      selector: { text: }
+    big:
+      name: Big number
+      description: Range -99.5 to 1999.5, shown with one decimal place.
+      default: 0
+      selector: { number: { min: -99.5, max: 1999.5, step: 0.1, mode: box } }
+    small:
+      name: Small number
+      description: Range -9 to 99, whole number.
+      default: 0
+      selector: { number: { min: -9, max: 99, step: 1, mode: box } }
+    validity:
+      name: Validity (s)
+      description: How long the thermometer keeps your value instead of its own reading. 65535 = permanently (until reboot).
+      default: 900
+      selector: { number: { min: 1, max: 65535, step: 1, mode: box } }
+    unit:
+      name: Big number unit
+      default: none
+      selector:
+        select:
+          options: [none, deg_ghe, minus, deg_f, lowdash, deg_c, lines, deg_e]
+    percent:
+      name: "% sign next to the small number"
+      default: false
+      selector: { boolean: }
+    battery:
+      name: Battery icon
+      default: false
+      selector: { boolean: }
+    happy:
+      name: Happy face
+      default: false
+      selector: { boolean: }
+    sad:
+      name: Sad face
+      default: false
+      selector: { boolean: }
+    bracket:
+      name: Brackets around the face
+      default: false
+      selector: { boolean: }
