@@ -2,7 +2,15 @@
 
 Fork: [scd29873/xiaomi-LYWSD03MMC-to-solar-meter](https://github.com/scd29873/xiaomi-LYWSD03MMC-to-solar-meter)
 Upstream: [jozefpis/xiaomi-LYWSD03MMC-to-solar-meter](https://github.com/jozefpis/xiaomi-LYWSD03MMC-to-solar-meter), 1 commit (`6ba1499`)
-Plan written 2026-11-13. Links accessed 2026-11-13.
+Plan written 2026-11-13. Updated 2026-11-14: development now runs on a computer on the home network, and the hardware choice is made (a pre-flashed SCREEK THS-M6 display and a SCREEK BP2-POE Bluetooth proxy). Links accessed 2026-11-13 and 2026-11-14.
+
+### Decisions at a glance (2026-11-14)
+| Item | Choice | Why |
+|---|---|---|
+| Display | **SCREEK THS-M6, BLE (BTHome) version, with battery.** A Xiaomi MJWSD06MMC sold pre-flashed with pvvx firmware. | No flashing. Newer LYWSD03MMC batches block OTA flashing. Bigger screen, and a CR2450 battery. |
+| Bluetooth link | **SCREEK BP2-POE** ESPHome Bluetooth proxy, on the existing PoE cable behind the TV | The HA host has no Bluetooth adapter. BP2-POE ships pre-flashed, cased, over Ethernet, and the maker states up to 4 active (GATT) connections. |
+| Component | This repo's `pvvx_display` service, unchanged | The MJWSD06MMC firmware has the same external-display command and LCD functions (see section 3, Phase 3). |
+| Fallback | Reflash the proxy role onto an ESP32 running ESPHome's `pvvx_mithermometer` display component | Only if writes through the proxy prove unreliable |
 
 ---
 
@@ -42,6 +50,12 @@ The component handles one write at a time, behind a lock, because many BLE adapt
 
 ## 2. Where things run: home vs cloud
 
+> **Update 2026-11-14:** development has moved to a Claude session on a computer on the home network. From there it can reach HA's web/API port, and git push to the fork works. The tables below still describe the physical constraints (BLE is local). The "bring Claude closer" options are no longer needed. To read HA entities and logs, the session only needs a long-lived HA access token, kept on that machine and never committed.
+>
+> Checked on 2026-11-14:
+> - HA runs as a VM (HAOS) on a small server.
+> - **Neither the server nor the VM has a Bluetooth adapter.** Hence the BP2-POE proxy.
+
 **The meter can't run in the cloud.** It runs inside your own HA at home. A cloud session is only useful for development.
 
 | Link | What it needs | Can the cloud do it? |
@@ -75,19 +89,38 @@ The component handles one write at a time, behind a lock, because many BLE adapt
 ## 3. Build phases
 
 ### Phase 0: prerequisites and decisions (blocking)
-- [ ] **HA host and Bluetooth:** you need an adapter that can make **active connections**.
-  - Tested by the author: a local adapter, e.g. a Raspberry Pi's built-in one.
-  - Untested: ESPHome BT proxies with active connections.
+- [ ] **Order the hardware** from shop.screek.io (one order, about US$46 plus shipping and GST, prices on 2026-11-14):
+  - [BP2-POE](https://shop.screek.io/products/bp2-poe), US$29.99
+  - [THS-M6](https://shop.screek.io/products/ths-m6), **"BLE (BTHome Supported) / With Battery / No External Probe"**, US$16.49. Not the Zigbee variant: Zigbee firmware has no external-display command.
+- [ ] **PoE port:** confirm the switch port for the cable behind the TV has PoE enabled and is on the same LAN/VLAN as HA.
+- [ ] **HA host and Bluetooth:** decided. The BP2-POE proxy provides an adapter that can make **active connections**.
+  - Tested by the upstream author: a local adapter, e.g. a Raspberry Pi's built-in one.
+  - Untested upstream: ESPHome BT proxies with active connections. The proxy route is the main thing Phase 3 proves.
+  - Proxy placement: at the TV's top or side edge, not flat behind the panel (metal and electronics block BLE). Aim for under ~10 m to the display, with few walls between.
+  - Alternatives considered (photos, prices, pros and cons in a separate comparison, 2026-11-14):
+    - Seeed XIAO W5500 Ethernet Adapter V1.2: ESPHome ready-made, US$21.90, large 3D-printed case
+    - Olimex ESP32-POE-ISO-EA + box: about €35, the most proven board
+    - GL.iNet GL-S10: ready-made, but the first flash needs soldering
+    - M5Stack AtomS3 Lite + Atomic PoE Base: community config only; open crash report with Ethernet plus the proxy
+    - A Shelly can't do it: stock firmware is a passive-only proxy.
 - [ ] **Inverter or energy integration:** identify these entities:
   - PV production (W)
   - Grid export (W), as a separate sensor or a signed meter value (+ export / − import)
 - [ ] **Optional:** a motion or presence entity near the display, for the 3-minute fast mode.
-- [ ] **Hardware:** LYWSD03MMC and a CR2032.
-  - Check the hardware revision and stock firmware in the flasher before buying more units.
-  - The author used B1.4 with stock firmware 1.0.0_0130.
+- [x] **Display hardware:** THS-M6 (MJWSD06MMC, CR2450), pre-flashed. See the decisions table.
+  - Fallback only: LYWSD03MMC and a CR2032. Check the hardware revision and stock firmware in the flasher before buying. The upstream author used B1.4 with stock firmware 1.0.0_0130. SCREEK reports that recent batches patch the BLE OTA hole and need a hardware programmer.
 - [ ] **Placement:** within reliable BLE range of the adapter, e.g. the kitchen.
 
-### Phase 1: flash the pvvx firmware (about 15 min, at home)
+### Phase 1: set up the proxy and display (about 15 min, at home)
+**With the chosen hardware there's nothing to flash.**
+1. **BP2-POE:** plug it into the PoE cable. HA should auto-discover it under Settings → Devices & services. Click **Add**.
+   - If it isn't discovered, use SCREEK's recovery and firmware tools at https://screek.io/bp2-poe.
+   - Check that active connections are on (the maker documents up to 4).
+2. **THS-M6:** fit the battery. HA should discover it as a BTHome device through the proxy.
+3. Record its MAC address (from the BTHome device in HA, or the label on the back).
+4. Optional: open the [pvvx Telink Flasher](https://pvvx.github.io/ATC_MiThermometer/TelinkMiFlasher.html) in Chrome or Edge near the device, **connect only** (don't flash), and note the firmware version. 4.4+ is needed for `validity: 65535`.
+
+#### Fallback: flashing an LYWSD03MMC yourself
 1. Open the [Telink Flasher](https://pvvx.github.io/ATC_MiThermometer/TelinkMiFlasher.html) in Chrome or Edge on a computer with Bluetooth.
 2. Click **Connect**, select `LYWSD03MMC`, then click **Do Activation** and wait for *Login successful*.
 3. Under *Custom Firmware*, choose the latest `ATC_vXX.bin` (the README names v59), then click **Start Flashing**.
@@ -117,6 +150,16 @@ data:
 ```
 - **Pass:** the LCD changes within seconds.
 - **Error "not in Bluetooth range (or not connectable)":** move the device closer, or check that the adapter supports active connections.
+- **This test is the go/no-go for the proxy route.** Repeat it a few times over a day. If writes through the BP2-POE fail or are flaky, switch to the fallback in the decisions table.
+
+**MJWSD06MMC display notes** (from pvvx's `src/lcd_mjwsd06mmc.c`, read 2026-11-14; not yet tested on hardware):
+- Same functions as the LYWSD03MMC:
+  - big number −99…1999, with a decimal point from −9.9 to 199.9
+  - small number −9…99, with a `%` sign; above 99 it shows "Hi"
+  - smiley: happy and sad
+  - battery symbol
+- Unit bits 5–7 map to slightly different glyphs: 0x20 "°Г", 0x40 "-", 0x80 "_". Check how a chosen unit looks on this screen.
+- The firmware README lists command `0x22` "Get/Set show LCD ext.data" on characteristic `0x1F1F` for all supported devices. MJWSD06MMC support was added in pvvx firmware 5.1.
 
 ### Phase 4: sensors and automation
 - [ ] Copy `examples/template_sensors.yaml` and swap in your entity IDs. Check the export sign convention.
@@ -139,7 +182,7 @@ data:
 - [ ] **Observability:** fire an HA event, or keep a `last_success` / `last_error` sensor for each address, so failed writes are visible.
 - [ ] **Battery:**
   - Only send when a value changes by more than a threshold (e.g. 0.1 kW or 2 %).
-  - Watch CR2032 life: one connection per minute drains it in a few months.
+  - Watch battery life: one connection per minute drains a CR2032 in a few months. The THS-M6's CR2450 has roughly twice the capacity, but SCREEK notes its battery-voltage reading isn't accurate yet. Judge by days per battery, not the reported %.
 - [ ] **Validation:** normalise the MAC address format and reject bad addresses early.
 - [ ] **Config flow (UI setup):** stretch goal, to replace the YAML-only `pvvx_display:` setup.
 - [ ] **Upstream:** offer generally useful fixes back to `jozefpis` as PRs.
@@ -215,26 +258,36 @@ No other project using the LCD as a solar or energy meter was found. Doing it di
 ---
 
 ## 6. Forks of upstream
-- Forks of a public repo are always public. This session couldn't list them because the GitHub API was blocked for the unattached upstream repo, not because they are private.
-- To see them:
+- Checked 2026-11-14 through the public GitHub API. Upstream has 4 forks:
+  - `scd29873` (this fork)
+  - `kolorafa`, `sunproject4444`, `orinocoz`
+- The three others were last pushed at the same moment as the upstream commit (2026-09-29), so they have no changes of their own. **Nothing to merge.**
+- To re-check later:
   - In a browser: https://github.com/jozefpis/xiaomi-LYWSD03MMC-to-solar-meter/forks
   - From the command line:
     ```bash
-    gh api repos/jozefpis/xiaomi-LYWSD03MMC-to-solar-meter/forks --jq '.[].full_name'
+    gh api repos/jozefpis/xiaomi-LYWSD03MMC-to-solar-meter/forks --jq '.[] | [.full_name, .pushed_at] | @tsv'
     ```
-- Known forks: `scd29873/xiaomi-LYWSD03MMC-to-solar-meter` (this fork, identical to upstream `6ba1499` at the time of writing).
-- To-do: review any other forks for useful changes. Paste their URLs into the session to have them diffed against `6ba1499`.
 
 ---
 
 ## 7. Open items and decisions
-- [ ] Inverter or energy integration and the exact entity IDs, so the example YAML can be tailored.
-- [ ] HA hardware and Bluetooth adapter (local, or ESPHome proxy).
+- [ ] Order the BP2-POE and THS-M6 (BLE version) (Phase 0).
+- [ ] Confirm PoE is enabled on the switch port for the cable behind the TV.
+- [ ] Create a long-lived HA token for the local Claude session (kept on that machine, never committed). Then read the inverter's PV production and grid export entities from HA and tailor the example YAML.
+  - The inverter is already integrated in HA over local Modbus, so the entities should exist.
+  - Read them from HA only. No direct Modbus requests to the inverter.
 - [ ] Motion sensor near the display: yes or no.
-- [ ] Which Phase 5 items to do first. Suggested order: tests → CI → observability → stale guard.
-- [ ] Whether to link a LAN machine through Remote Control for log access.
+- [ ] Which Phase 5 items to do first. Suggested order: tests → CI → observability → stale guard. These can start before the hardware arrives.
+- [ ] Update `README.md` and the examples to mention the MJWSD06MMC / THS-M6 once Phase 3 passes.
+- [x] ~~HA hardware and Bluetooth adapter~~: HA VM with no Bluetooth, so the BP2-POE proxy (2026-11-14).
+- [x] ~~Whether to link a LAN machine through Remote Control~~: not needed. The session now runs on the home network (2026-11-14).
+- [x] ~~Review other forks~~: none has changes (2026-11-14).
 
 ## 8. Caveats
-- Flashing compatibility depends on the hardware revision and stock firmware version. Check before buying several units.
+- Writing through an ESPHome Bluetooth proxy hasn't been tested by the upstream author. SCREEK states BP2-POE supports up to 4 GATT connections. Phase 3 is the real test.
+- MJWSD06MMC compatibility comes from reading the pvvx source and README, not from a test on hardware.
+- BP2-POE was released in January 2026 by a small maker, so it has little track record. One April 2026 forum report of a unit not being discovered turned out to be a different board.
+- Flashing compatibility (fallback route only) depends on the LYWSD03MMC hardware revision and stock firmware version.
 - The project's behaviour claims (range limits, `Hi` at 100, the validity semantics, battery life) come from the upstream README. They have not been independently tested here.
-- Third-party project status (maintained or experimental) is as described on each page on 2026-11-13.
+- Third-party project status, prices and stock are as shown on each page on 2026-11-13/14.
